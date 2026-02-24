@@ -1,26 +1,128 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
+/* ── Cafuné brand color palette ───────────────────────────────────────────────
+   Replaces Tailwind's rose scale with warm terracotta-mocha tones
+   extracted from the Espacio Cafuné brand identity.
+   All rose-* classes (bg-rose-600, text-rose-50, etc.) now render brand colors.
+────────────────────────────────────────────────────────────────────────────── */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-rose-50:  #EEF5F5;
+  --color-rose-100: #D9EAEA;
+  --color-rose-200: #BCDEDE;
+  --color-rose-300: #9BCECE;
+  --color-rose-400: #86BCBB;
+  --color-rose-500: #7DAEAE;
+  --color-rose-600: #76A6A5;   /* ← primary brand action color */
+  --color-rose-700: #5E8F8E;
+  --color-rose-800: #4B7373;
+  --color-rose-900: #3D5151;
+
+  /* Page background & text */
+  --color-background: #F2F7F7;
+  --color-foreground: #3D5151;
+
+  /* Warm terracotta — secondary brand accent (#A68776) */
+  --color-terra-50:  #FAF3EF;
+  --color-terra-100: #F2DDD3;
+  --color-terra-200: #E4BCA9;
+  --color-terra-300: #D19B82;
+  --color-terra-400: #BF8A70;
+  --color-terra-500: #A68776;
+  --color-terra-600: #8F7060;
+  --color-terra-700: #705749;
+  --color-terra-800: #534035;
+  --color-terra-900: #3A2D26;
+
+  /* Monstera/plant greens */
+  --color-plant-dark:  #3D6B4F;
+  --color-plant-mid:   #568A66;
+  --color-plant-light: #7FB898;
+  --color-plant-pale:  #C4DEC8;
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ── View Transitions ─────────────────────────────────────────────────────── */
+@view-transition {
+  navigation: auto;
+}
+
+::view-transition-old(root) {
+  animation: 160ms ease-out both vt-fade-out;
+}
+::view-transition-new(root) {
+  animation: 200ms ease-in both vt-fade-in;
+}
+
+@keyframes vt-fade-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(6px); }
+}
+@keyframes vt-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Base styles ──────────────────────────────────────────────────────────── */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-geist-sans, Arial, Helvetica, sans-serif);
+  /* Kiosk optimizations */
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  overscroll-behavior: none;
+}
+
+/* Allow text selection in inputs */
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Smooth scrolling */
+* {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── Kiosk utilities ──────────────────────────────────────────────────────── */
+
+/* Hide scrollbars but keep scroll */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Global tap feedback (baseline for elements not wrapped in Framer Motion) ── */
+button, [role="button"], a {
+  /* Fast transition so CSS active state feels immediate */
+  transition: opacity 60ms ease, filter 60ms ease;
+}
+/* Touch devices: brighten slightly on press for immediate feedback */
+@media (hover: none) {
+  button:active, [role="button"]:active {
+    filter: brightness(0.88);
+    opacity: 0.85;
+  }
+}
+
+/* Remove number input spinners (we use custom steppers) */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type=number] {
+  -moz-appearance: textfield;
 }
