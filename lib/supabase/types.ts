@@ -82,31 +82,66 @@ export type Database = {
       // ── clients ────────────────────────────────────────────────────────────
       clients: {
         Row: {
-          id:         string
-          full_name:  string
-          phone:      string | null
-          email:      string | null
-          notes:      string | null
-          created_at: string
-          updated_at: string
+          id:             string
+          full_name:      string
+          phone:          string | null
+          email:          string | null
+          notes:          string | null
+          rut:            string | null
+          hair_length_cm: number | null
+          public_token:   string
+          created_at:     string
+          updated_at:     string
         }
         Insert: {
-          id?:        string
-          full_name:  string
-          phone?:     string | null
-          email?:     string | null
-          notes?:     string | null
-          created_at?: string
-          updated_at?: string
+          id?:            string
+          full_name:      string
+          phone?:         string | null
+          email?:         string | null
+          notes?:         string | null
+          rut?:           string | null
+          hair_length_cm?: number | null
+          public_token?:  string
+          created_at?:    string
+          updated_at?:    string
         }
         Update: {
-          full_name?: string
-          phone?:     string | null
-          email?:     string | null
-          notes?:     string | null
-          updated_at?: string
+          full_name?:     string
+          phone?:         string | null
+          email?:         string | null
+          notes?:         string | null
+          rut?:           string | null
+          hair_length_cm?: number | null
+          updated_at?:    string
         }
         Relationships: []
+      }
+
+      // ── client_hair_history ────────────────────────────────────────────────
+      client_hair_history: {
+        Row: {
+          id:           string
+          client_id:    string
+          length_cm:    number
+          recorded_at:  string
+          receipt_id:   string | null
+          service_name: string | null
+          variant_name: string | null
+        }
+        Insert: {
+          id?:          string
+          client_id:    string
+          length_cm:    number
+          recorded_at?: string
+          receipt_id?:  string | null
+          service_name?: string | null
+          variant_name?: string | null
+        }
+        Update: never
+        Relationships: [
+          { foreignKeyName: 'hair_history_client_id_fkey'; columns: ['client_id']; referencedRelation: 'clients'; referencedColumns: ['id'] },
+          { foreignKeyName: 'hair_history_receipt_id_fkey'; columns: ['receipt_id']; referencedRelation: 'receipts'; referencedColumns: ['id'] }
+        ]
       }
 
       // ── service_catalog ────────────────────────────────────────────────────
@@ -178,29 +213,72 @@ export type Database = {
         Relationships: []
       }
 
+      // ── service_variants ───────────────────────────────────────────────────
+      service_variants: {
+        Row: {
+          id:              string
+          service_id:      string
+          name:            string
+          price:           number
+          is_active:       boolean
+          sort_order:      number
+          hair_length_min: number | null
+          hair_length_max: number | null
+          created_at:      string
+          updated_at:      string
+        }
+        Insert: {
+          id?:              string
+          service_id:       string
+          name:             string
+          price:            number
+          is_active?:       boolean
+          sort_order?:      number
+          hair_length_min?: number | null
+          hair_length_max?: number | null
+          created_at?:      string
+          updated_at?:      string
+        }
+        Update: {
+          name?:            string
+          price?:           number
+          is_active?:       boolean
+          sort_order?:      number
+          hair_length_min?: number | null
+          hair_length_max?: number | null
+          updated_at?:      string
+        }
+        Relationships: [
+          { foreignKeyName: 'service_variants_service_id_fkey'; columns: ['service_id']; referencedRelation: 'service_catalog'; referencedColumns: ['id'] }
+        ]
+      }
+
       // ── commission_rules ───────────────────────────────────────────────────
       commission_rules: {
         Row: {
-          id:             string
-          service_id:     string
-          worker_id:      string | null
-          commission_pct: number
-          valid_from:     string
-          valid_until:    string | null
-          created_at:     string
+          id:               string
+          service_id:       string
+          worker_id:        string | null
+          commission_type:  CommissionType
+          commission_value: number
+          valid_from:       string
+          valid_until:      string | null
+          created_at:       string
         }
         Insert: {
-          id?:            string
-          service_id:     string
-          worker_id?:     string | null
-          commission_pct: number
-          valid_from?:    string
-          valid_until?:   string | null
-          created_at?:    string
+          id?:               string
+          service_id:        string
+          worker_id?:        string | null
+          commission_type?:  CommissionType
+          commission_value:  number
+          valid_from?:       string
+          valid_until?:      string | null
+          created_at?:       string
         }
         Update: {
-          commission_pct?: number
-          valid_until?:    string | null
+          commission_type?:  CommissionType
+          commission_value?: number
+          valid_until?:      string | null
         }
         Relationships: [
           { foreignKeyName: 'commission_rules_service_id_fkey'; columns: ['service_id']; referencedRelation: 'service_catalog'; referencedColumns: ['id'] },
@@ -267,6 +345,8 @@ export type Database = {
           commission_type:  CommissionType
           commission_value: number
           commission_amt:   number
+          variant_id:       string | null
+          variant_name:     string | null
           created_at:       string
         }
         Insert: {
@@ -278,13 +358,16 @@ export type Database = {
           commission_type:  CommissionType
           commission_value: number
           commission_amt:   number
+          variant_id?:      string | null
+          variant_name?:    string | null
           created_at?:      string
         }
         Update: never  // las líneas de servicio no se editan
         Relationships: [
           { foreignKeyName: 'receipt_services_receipt_id_fkey'; columns: ['receipt_id']; referencedRelation: 'receipts'; referencedColumns: ['id'] },
           { foreignKeyName: 'receipt_services_service_id_fkey'; columns: ['service_id']; referencedRelation: 'service_catalog'; referencedColumns: ['id'] },
-          { foreignKeyName: 'receipt_services_worker_id_fkey'; columns: ['worker_id']; referencedRelation: 'workers'; referencedColumns: ['id'] }
+          { foreignKeyName: 'receipt_services_worker_id_fkey'; columns: ['worker_id']; referencedRelation: 'workers'; referencedColumns: ['id'] },
+          { foreignKeyName: 'receipt_services_variant_id_fkey'; columns: ['variant_id']; referencedRelation: 'service_variants'; referencedColumns: ['id'] }
         ]
       }
 
@@ -384,6 +467,59 @@ export type Database = {
         ]
       }
 
+      // ── payroll_payments ───────────────────────────────────────────────────
+      payroll_payments: {
+        Row: {
+          id:             string
+          worker_id:      string
+          date_from:      string
+          date_to:        string
+          net_amount:     number
+          payment_method: 'cash' | 'transfer'
+          paid_at:        string
+          notes:          string | null
+          created_at:     string
+        }
+        Insert: {
+          id?:            string
+          worker_id:      string
+          date_from:      string
+          date_to:        string
+          net_amount:     number
+          payment_method: 'cash' | 'transfer'
+          paid_at?:       string
+          notes?:         string | null
+          created_at?:    string
+        }
+        Update: {
+          payment_method?: 'cash' | 'transfer'
+          paid_at?:        string
+          notes?:          string | null
+        }
+        Relationships: [
+          { foreignKeyName: 'payroll_payments_worker_id_fkey'; columns: ['worker_id']; referencedRelation: 'workers'; referencedColumns: ['id'] }
+        ]
+      }
+
+      // ── app_settings ───────────────────────────────────────────────────────
+      app_settings: {
+        Row: {
+          key:        string
+          value:      string
+          updated_at: string
+        }
+        Insert: {
+          key:         string
+          value:       string
+          updated_at?: string
+        }
+        Update: {
+          value?:      string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+
       // ── audit_log ──────────────────────────────────────────────────────────
       audit_log: {
         Row: {
@@ -439,6 +575,7 @@ export type UserRow            = Tables<'users'>
 export type WorkerRow          = Tables<'workers'>
 export type ClientRow          = Tables<'clients'>
 export type ServiceRow         = Tables<'service_catalog'>
+export type ServiceVariantRow  = Tables<'service_variants'>
 export type ProductRow         = Tables<'product_catalog'>
 export type CommissionRuleRow  = Tables<'commission_rules'>
 export type ReceiptRow         = Tables<'receipts'>
@@ -446,6 +583,11 @@ export type ReceiptServiceRow  = Tables<'receipt_services'>
 export type ReceiptProductRow  = Tables<'receipt_products'>
 export type PayrollPeriodRow   = Tables<'payroll_periods'>
 export type PayrollEntryRow    = Tables<'payroll_entries'>
+export type PayrollPaymentRow  = Tables<'payroll_payments'>
+
+export type ServiceWithVariants = ServiceRow & {
+  service_variants: ServiceVariantRow[]
+}
 
 // ─── Tipos compuestos (joins frecuentes) ─────────────────────────────────────
 
@@ -458,6 +600,16 @@ export type ReceiptWithLines = ReceiptRow & {
     product_catalog: Pick<ProductRow, 'id' | 'name'>
   })[]
   clients: Pick<ClientRow, 'id' | 'full_name' | 'phone'> | null
+}
+
+export type ClientHairHistoryRow = Tables<'client_hair_history'>
+
+export type ServiceVariantDraft = {
+  tempId:          string
+  name:            string
+  price:           number
+  hair_length_min: number | null
+  hair_length_max: number | null
 }
 
 export type WorkerCommissionSummary = {

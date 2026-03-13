@@ -2,7 +2,7 @@ import { notFound, redirect } from 'next/navigation'
 import { getMyProfile } from '@/lib/actions/auth'
 import { getReceipt } from '@/lib/actions/receipts'
 import { getWorkers } from '@/lib/actions/workers'
-import { getServices, getProducts } from '@/lib/actions/catalog'
+import { getServicesWithVariants, getProducts } from '@/lib/actions/catalog'
 import { ReceiptDetailClient } from './receipt-detail-client'
 
 export default async function ReceiptDetailPage({
@@ -17,7 +17,7 @@ export default async function ReceiptDetailPage({
   const [receipt, workers, services, products] = await Promise.all([
     getReceipt(id),
     getWorkers(true),
-    getServices(true),
+    getServicesWithVariants(true),
     getProducts(true),
   ])
 

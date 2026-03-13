@@ -42,11 +42,13 @@ export async function addServiceToReceipt(input: {
   service_id:    string
   worker_id:     string
   price_charged: number
+  variant_id?:   string
+  variant_name?: string
 }) {
   const supabase = await createClient()
 
-  // Snapshot de comisión del servicio al momento de la venta
-  const { commission_type, commission_value } = await resolveCommission(input.service_id)
+  // Snapshot de comisión al momento de la venta (override por trabajadora si existe)
+  const { commission_type, commission_value } = await resolveCommission(input.service_id, input.worker_id)
   const commission_amt = calcCommissionAmt(input.price_charged, commission_type, commission_value)
 
   const { data, error } = await supabase
@@ -59,6 +61,8 @@ export async function addServiceToReceipt(input: {
       commission_type,
       commission_value,
       commission_amt,
+      variant_id:       input.variant_id   ?? null,
+      variant_name:     input.variant_name ?? null,
     } satisfies ReceiptServiceInsert)
     .select('*, service_catalog(name), workers(full_name)')
     .single()
@@ -80,7 +84,6 @@ export async function addProductToReceipt(input: {
 }) {
   const supabase = await createClient()
 
-  // Obtener precio actual del producto (snapshot)
   const { data: product, error: productError } = await supabase
     .from('product_catalog')
     .select('price')
@@ -195,7 +198,7 @@ export async function getReceipt(id: string) {
       clients(id, full_name, phone, email),
       workers(id, full_name),
       receipt_services(
-        id, price_charged, commission_type, commission_value, commission_amt,
+        id, price_charged, commission_type, commission_value, commission_amt, variant_id, variant_name,
         service_catalog(id, name),
         workers(id, full_name)
       ),

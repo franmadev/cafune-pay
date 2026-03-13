@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getMyProfile } from '@/lib/actions/auth'
 import { formatCurrency } from '@/lib/utils'
-import { Plus, BarChart2, Users, Tag, Receipt, ShoppingCart } from 'lucide-react'
+import { Plus, BarChart2, Users, Tag, Receipt, ShoppingCart, UserRound, Settings } from 'lucide-react'
 import { MonsteraLeaf } from '@/components/ui/monstera-leaf'
 import type { LucideIcon } from 'lucide-react'
 
@@ -107,15 +107,25 @@ export default async function DashboardPage() {
           )}
         </div>
 
-        {/* ── Admin quick links ── */}
-        {isAdmin && (
+        {/* ── Quick links ── */}
+        {isAdmin ? (
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.12em] text-zinc-400 mb-4">Acceso rápido</p>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
-              <QuickLink href="/dashboard/reports"  label="Reportes"    icon={BarChart2} />
-              <QuickLink href="/dashboard/workers"  label="Equipo"       icon={Users} />
-              <QuickLink href="/dashboard/catalog"  label="Catálogo"     icon={Tag} />
-              <QuickLink href="/dashboard/receipts" label="Historial"    icon={Receipt} />
+              <QuickLink href="/dashboard/reports"  label="Reportes"      icon={BarChart2} />
+              <QuickLink href="/dashboard/workers"  label="Equipo"        icon={Users} />
+              <QuickLink href="/dashboard/clients"  label="Clientas"      icon={UserRound} />
+              <QuickLink href="/dashboard/catalog"  label="Catálogo"      icon={Tag} />
+              <QuickLink href="/dashboard/receipts" label="Historial"     icon={Receipt} />
+              <QuickLink href="/dashboard/settings" label="Configuración" icon={Settings} />
+            </div>
+          </div>
+        ) : worker && (
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.12em] text-zinc-400 mb-4">Acceso rápido</p>
+            <div className="grid grid-cols-2 gap-3">
+              <QuickLink href="/dashboard/clients" label="Clientas" icon={UserRound} />
+              <QuickLink href={`/dashboard/reports/payroll?workerId=${worker.id}`} label="Mi nómina" icon={Receipt} />
             </div>
           </div>
         )}

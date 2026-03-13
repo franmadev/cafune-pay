@@ -1,14 +1,16 @@
 'use client'
 
 import { useState, useOptimistic } from 'react'
+import Link from 'next/link'
+import { ChevronRight, FileText } from 'lucide-react'
 import { SearchInput } from '@/components/ui/search-input'
 import { ConfirmSubmitButton } from '@/components/ui/confirm-submit-button'
 
 type Worker = {
-  id:       string
+  id:        string
   full_name: string
-  phone?:   string | null
-  email?:   string | null
+  phone?:    string | null
+  email?:    string | null
   is_active: boolean
 }
 
@@ -58,23 +60,42 @@ export function WorkersListClient({ workers, handleDeactivate }: Props) {
             w.is_active ? 'border-zinc-200' : 'border-zinc-100 opacity-60'
           }`}
         >
-          <div>
+          <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-zinc-900">{w.full_name}</p>
             <p className="text-xs text-zinc-400">
               {[w.phone, w.email].filter(Boolean).join(' · ') || 'Sin contacto'}
             </p>
           </div>
-          {w.is_active && (
-            <form action={clientDeactivate}>
-              <input type="hidden" name="id" value={w.id} />
-              <ConfirmSubmitButton
-                message={`¿Desactivar a ${w.full_name}?`}
-                className="text-xs text-zinc-400 hover:text-red-500 transition-colors px-2 py-1"
-              >
-                Desactivar
-              </ConfirmSubmitButton>
-            </form>
-          )}
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {w.is_active && (
+              <>
+                <Link
+                  href={`/dashboard/reports/payroll?workerId=${w.id}`}
+                  title="Ver nómina vigente"
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold text-[#76A6A5] hover:text-[#3D5151] hover:bg-[#F2F7F7] rounded-lg transition-colors"
+                >
+                  <FileText size={13} />
+                  Nómina
+                </Link>
+                <form action={clientDeactivate}>
+                  <input type="hidden" name="id" value={w.id} />
+                  <ConfirmSubmitButton
+                    message={`¿Desactivar a ${w.full_name}?`}
+                    className="text-xs text-zinc-400 hover:text-red-500 transition-colors px-2 py-1"
+                  >
+                    Desactivar
+                  </ConfirmSubmitButton>
+                </form>
+              </>
+            )}
+            <Link
+              href={`/dashboard/workers/${w.id}`}
+              title="Ver detalle"
+              className="p-2 text-zinc-300 hover:text-[#3D5151] transition-colors"
+            >
+              <ChevronRight size={16} />
+            </Link>
+          </div>
         </div>
       ))}
     </div>

@@ -27,7 +27,8 @@ import type { UserRole, PaymentMethod } from '@/lib/supabase/types'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Service = { id: string; name: string; base_price: number; commission_type: 'percentage' | 'fixed'; commission_value: number }
+type ServiceVariant = { id: string; name: string; price: number; is_active: boolean; sort_order: number }
+type Service = { id: string; name: string; base_price: number; commission_type: 'percentage' | 'fixed'; commission_value: number; service_variants: ServiceVariant[] }
 type Worker  = { id: string; full_name: string }
 type Product = { id: string; name: string; price: number }
 
@@ -40,6 +41,7 @@ interface ReceiptLine {
   quantity?:         number
   unit_price?:       number
   subtotal?:         number
+  variant_name?:     string | null  // for service lines
   service_catalog?: { id: string; name: string } | null
   product_catalog?: { id: string; name: string } | null
   workers?:         { id: string; full_name: string } | null
@@ -136,6 +138,7 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
   // Service form
   const [selectedServiceId, setSelectedServiceId] = useState('')
   const [selectedWorkerId,  setSelectedWorkerId]  = useState(workers[0]?.id ?? '')
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null)
   const [priceCharged,      setPriceCharged]      = useState('')
 
   // Product form
@@ -164,18 +167,22 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
 
   function handleServiceSelect(id: string) {
     setSelectedServiceId(id)
+    setSelectedVariantId(null)
     const svc = services.find(s => s.id === id)
     if (svc) setPriceCharged(String(svc.base_price))
   }
 
   function handleAddService() {
     if (!selectedServiceId || !selectedWorkerId || !priceCharged || !selectedService) return
+    const activeVariants = selectedService.service_variants.filter(v => v.is_active)
+    if (activeVariants.length > 0 && !selectedVariantId) { setError('Selecciona una variante'); return }
     setError(null)
 
-    const worker = workers.find(w => w.id === selectedWorkerId)
-    const price  = Number(priceCharged)
+    const worker      = workers.find(w => w.id === selectedWorkerId)
+    const price       = Number(priceCharged)
+    const variant     = selectedVariantId ? activeVariants.find(v => v.id === selectedVariantId) : undefined
+    const variantName = variant?.name ?? null
 
-    // Build optimistic line
     const optimisticLine: ReceiptLine = {
       id:              `opt-svc-${Date.now()}`,
       service_catalog: { id: selectedServiceId, name: selectedService.name },
@@ -184,6 +191,7 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
       commission_type:  selectedService.commission_type,
       commission_value: selectedService.commission_value,
       commission_amt:   calcCommissionAmt(price, selectedService.commission_type, selectedService.commission_value),
+      variant_name:    variantName,
       pending:         true,
     }
 
@@ -191,6 +199,7 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
       dispatchService({ type: 'add', line: optimisticLine })
       closeSheet()
       setSelectedServiceId('')
+      setSelectedVariantId(null)
       setPriceCharged('')
 
       const result = await addServiceToReceipt({
@@ -198,6 +207,8 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
         service_id:    selectedServiceId,
         worker_id:     selectedWorkerId,
         price_charged: price,
+        variant_id:    selectedVariantId ?? undefined,
+        variant_name:  variantName ?? undefined,
       })
 
       if (result.error) {
@@ -215,6 +226,7 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
     setError(null)
 
     const product = products.find(p => p.id === selectedProductId)!
+
     const optimisticLine: ReceiptLine = {
       id:              `opt-prod-${Date.now()}`,
       product_catalog: { id: selectedProductId, name: product.name },
@@ -230,7 +242,11 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
       setSelectedProductId('')
       setQty(1)
 
-      const result = await addProductToReceipt({ receipt_id: receipt.id, product_id: selectedProductId, quantity: qty })
+      const result = await addProductToReceipt({
+        receipt_id: receipt.id,
+        product_id: selectedProductId,
+        quantity:   qty,
+      })
 
       if (result.error) {
         playError()
@@ -291,7 +307,8 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
   // ── Shared sub-renders ────────────────────────────────────────────────────
 
   function ServiceCard({ svc }: { svc: Service }) {
-    const active = selectedServiceId === svc.id
+    const active         = selectedServiceId === svc.id
+    const activeVariants = svc.service_variants.filter(v => v.is_active)
     return (
       <motion.button
         onClick={() => handleServiceSelect(svc.id)}
@@ -306,7 +323,11 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
         }`}
       >
         <p className="text-sm font-bold text-zinc-900 leading-snug">{svc.name}</p>
-        <p className="text-base font-black text-terra-500 mt-2 tabular-nums">{formatCurrency(svc.base_price)}</p>
+        {activeVariants.length > 0 ? (
+          <p className="text-xs text-zinc-400 mt-2">{activeVariants.length} variante{activeVariants.length !== 1 ? 's' : ''}</p>
+        ) : (
+          <p className="text-base font-black text-terra-500 mt-2 tabular-nums">{formatCurrency(svc.base_price)}</p>
+        )}
       </motion.button>
     )
   }
@@ -315,7 +336,7 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
     const active = selectedProductId === p.id
     return (
       <motion.button
-        onClick={() => setSelectedProductId(p.id)}
+        onClick={() => { setSelectedProductId(p.id); setQty(1) }}
         disabled={!isOpen}
         whileTap={{ scale: 0.91 }}
         animate={{ scale: active ? 1.04 : 1 }}
@@ -470,14 +491,14 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
                       >
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <p className="text-sm font-semibold text-zinc-900 leading-snug">{line.service_catalog?.name}</p>
+                            <p className="text-sm font-semibold text-zinc-900 leading-snug">
+                              {line.service_catalog?.name}
+                              {line.variant_name && <span className="text-zinc-400 font-normal"> · {line.variant_name}</span>}
+                            </p>
                             {line.pending && <Spinner size={13} className="text-zinc-400 flex-shrink-0" />}
                           </div>
                           <p className="text-xs text-zinc-400 mt-1">
                             {line.workers?.full_name}
-                            {line.commission_amt ? (
-                              <span className="text-zinc-300"> · com. {formatCurrency(line.commission_amt)}</span>
-                            ) : null}
                           </p>
                         </div>
                         <div className="flex items-center gap-3 ml-4 flex-shrink-0">
@@ -786,6 +807,38 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
                           transition={SPRING}
                           className="space-y-5"
                         >
+                          {/* Variant picker */}
+                          {(() => {
+                            const activeVariants = selectedService.service_variants.filter(v => v.is_active).sort((a,b) => a.sort_order - b.sort_order)
+                            if (activeVariants.length === 0) return null
+                            return (
+                              <div>
+                                <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Variante</p>
+                                <div className="grid grid-cols-2 gap-2">
+                                  {activeVariants.map(v => (
+                                    <motion.button
+                                      key={v.id}
+                                      onClick={() => {
+                                        const next = v.id === selectedVariantId ? null : v.id
+                                        setSelectedVariantId(next)
+                                        setPriceCharged(String(next ? v.price : selectedService.base_price))
+                                      }}
+                                      whileTap={{ scale: 0.93 }}
+                                      transition={SPRING}
+                                      className={`flex items-center justify-between px-4 py-3 rounded-xl border-2 transition-colors ${
+                                        v.id === selectedVariantId
+                                          ? 'border-rose-500 bg-rose-50 shadow-sm'
+                                          : 'border-zinc-200 bg-white hover:border-zinc-300'
+                                      }`}
+                                    >
+                                      <span className="text-sm font-bold text-[#3D5151]">{v.name}</span>
+                                      <span className="text-sm font-bold text-terra-500 tabular-nums">{formatCurrency(v.price)}</span>
+                                    </motion.button>
+                                  ))}
+                                </div>
+                              </div>
+                            )
+                          })()}
                           {/* Worker chips */}
                           <div>
                             <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Trabajadora</p>
@@ -807,11 +860,6 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
                               className="w-full px-5 py-4 rounded-2xl border-2 border-zinc-200 bg-white text-2xl font-black text-zinc-900 focus:outline-none focus:border-rose-400 transition-colors tabular-nums"
                               placeholder={String(selectedService.base_price)}
                             />
-                            {commissionPreview && (
-                              <p className="text-sm text-zinc-400 mt-2 flex items-center gap-1.5">
-                                <Tag size={13} /> {commissionPreview}
-                              </p>
-                            )}
                           </div>
                         </motion.div>
                       )}
@@ -834,46 +882,29 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
                       {products.map((p) => <ProductCard key={p.id} p={p} />)}
                     </div>
                     <AnimatePresence>
-                      {selectedProductId && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 12 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: 12 }}
-                          transition={SPRING}
-                        >
-                          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Cantidad</p>
-                          <div className="flex items-center gap-4">
-                            <motion.button
-                              onClick={() => setQty(q => Math.max(1, q - 1))}
-                              whileTap={{ scale: 0.82 }}
-                              transition={SPRING_FAST}
-                              className="w-14 h-14 rounded-2xl border-2 border-zinc-200 bg-white text-zinc-700 text-2xl font-bold"
-                            >
-                              −
-                            </motion.button>
-                            <motion.span
-                              key={qty}
-                              initial={{ scale: 1.3 }}
-                              animate={{ scale: 1 }}
-                              transition={SPRING_FAST}
-                              className="text-4xl font-black text-zinc-900 w-14 text-center tabular-nums"
-                            >
-                              {qty}
-                            </motion.span>
-                            <motion.button
-                              onClick={() => setQty(q => q + 1)}
-                              whileTap={{ scale: 0.82 }}
-                              transition={SPRING_FAST}
-                              className="w-14 h-14 rounded-2xl border-2 border-zinc-200 bg-white text-zinc-700 text-2xl font-bold"
-                            >
-                              +
-                            </motion.button>
-                            <span className="text-base font-bold text-zinc-500 ml-1 tabular-nums">
-                              = {formatCurrency((products.find(p => p.id === selectedProductId)?.price ?? 0) * qty)}
-                            </span>
-                          </div>
-                        </motion.div>
-                      )}
+                      {selectedProductId && (() => {
+                        const selProd = products.find(p => p.id === selectedProductId)!
+                        return (
+                          <motion.div
+                            key="product-form"
+                            initial={{ opacity: 0, y: 12 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 12 }}
+                            transition={SPRING}
+                            className="space-y-4"
+                          >
+                            <div>
+                              <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Cantidad</p>
+                              <div className="flex items-center gap-4">
+                                <motion.button onClick={() => setQty(q => Math.max(1, q - 1))} whileTap={{ scale: 0.82 }} transition={SPRING_FAST} className="w-14 h-14 rounded-2xl border-2 border-zinc-200 bg-white text-zinc-700 text-2xl font-bold">−</motion.button>
+                                <motion.span key={qty} initial={{ scale: 1.3 }} animate={{ scale: 1 }} transition={SPRING_FAST} className="text-4xl font-black text-zinc-900 w-14 text-center tabular-nums">{qty}</motion.span>
+                                <motion.button onClick={() => setQty(q => q + 1)} whileTap={{ scale: 0.82 }} transition={SPRING_FAST} className="w-14 h-14 rounded-2xl border-2 border-zinc-200 bg-white text-zinc-700 text-2xl font-bold">+</motion.button>
+                                <span className="text-base font-bold text-zinc-500 ml-1 tabular-nums">= {formatCurrency(selProd.price * qty)}</span>
+                              </div>
+                            </div>
+                          </motion.div>
+                        )
+                      })()}
                     </AnimatePresence>
                   </>
                 )}
@@ -886,16 +917,22 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
             {catalogTab === 'service' ? (
               <motion.button
                 onClick={handleAddService}
-                disabled={!isOpen || !selectedServiceId || !priceCharged || !selectedWorkerId || isPending}
+                disabled={!isOpen || !selectedServiceId || !priceCharged || !selectedWorkerId || isPending || (() => {
+                  if (!selectedService) return false
+                  const av = selectedService.service_variants.filter(v => v.is_active)
+                  return av.length > 0 && !selectedVariantId
+                })()}
                 whileTap={{ scale: 0.97 }}
                 transition={SPRING}
                 className="w-full py-5 bg-rose-900 text-white rounded-2xl text-base font-black hover:bg-rose-800 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 shadow-lg shadow-rose-900/15"
               >
                 {isPending
                   ? <><Spinner size={20} /> Agregando...</>
-                  : selectedService
-                    ? <><Plus size={22} strokeWidth={2.5} /> Agregar — {formatCurrency(Number(priceCharged) || selectedService.base_price)}</>
-                    : <><Plus size={22} strokeWidth={2.5} /> Selecciona un servicio</>
+                  : !selectedService
+                    ? <><Plus size={22} strokeWidth={2.5} /> Selecciona un servicio</>
+                    : selectedService.service_variants.filter(v => v.is_active).length > 0 && !selectedVariantId
+                      ? <><Plus size={22} strokeWidth={2.5} /> Selecciona variante</>
+                      : <><Plus size={22} strokeWidth={2.5} /> Agregar — {formatCurrency(Number(priceCharged) || selectedService.base_price)}</>
                 }
               </motion.button>
             ) : (
@@ -909,7 +946,9 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
                 >
                   {isPending
                     ? <><Spinner size={20} /> Agregando...</>
-                    : <><Plus size={22} strokeWidth={2.5} /> {selectedProductId ? `Agregar ×${qty}` : 'Selecciona un producto'}</>
+                    : !selectedProductId
+                      ? <><Plus size={22} strokeWidth={2.5} /> Selecciona un producto</>
+                      : <><Plus size={22} strokeWidth={2.5} /> Agregar ×{qty} — {formatCurrency((products.find(x => x.id === selectedProductId)?.price ?? 0) * qty)}</>
                   }
                 </motion.button>
                 <motion.button
@@ -938,6 +977,38 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
             <AnimatePresence>
               {selectedService && (
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={SPRING} className="space-y-4">
+                  {/* Variant picker */}
+                  {(() => {
+                    const activeVariants = selectedService.service_variants.filter(v => v.is_active).sort((a,b) => a.sort_order - b.sort_order)
+                    if (activeVariants.length === 0) return null
+                    return (
+                      <div>
+                        <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Variante</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          {activeVariants.map(v => (
+                            <motion.button
+                              key={v.id}
+                              onClick={() => {
+                                const next = v.id === selectedVariantId ? null : v.id
+                                setSelectedVariantId(next)
+                                setPriceCharged(String(next ? v.price : selectedService.base_price))
+                              }}
+                              whileTap={{ scale: 0.93 }}
+                              transition={SPRING}
+                              className={`flex items-center justify-between px-3 py-3 rounded-xl border-2 transition-colors ${
+                                v.id === selectedVariantId
+                                  ? 'border-rose-500 bg-rose-50'
+                                  : 'border-zinc-200 bg-white'
+                              }`}
+                            >
+                              <span className="text-sm font-bold text-[#3D5151]">{v.name}</span>
+                              <span className="text-sm font-bold text-terra-500 tabular-nums">{formatCurrency(v.price)}</span>
+                            </motion.button>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })()}
                   <div>
                     <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Trabajadora</p>
                     <div className="flex flex-wrap gap-2">
@@ -957,16 +1028,23 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
                       className="w-full px-4 py-4 rounded-2xl border-2 border-zinc-200 text-2xl font-black focus:outline-none focus:border-rose-400 transition-colors tabular-nums"
                       placeholder={String(selectedService.base_price)}
                     />
-                    {commissionPreview && <p className="text-xs text-zinc-400 mt-1.5">{commissionPreview}</p>}
                   </div>
                   <motion.button
                     onClick={handleAddService}
-                    disabled={isPending || !priceCharged || !selectedWorkerId}
+                    disabled={isPending || !priceCharged || !selectedWorkerId || (() => {
+                      const av = selectedService.service_variants.filter(v => v.is_active)
+                      return av.length > 0 && !selectedVariantId
+                    })()}
                     whileTap={{ scale: 0.96 }}
                     transition={SPRING}
                     className="w-full py-5 bg-rose-900 text-white rounded-2xl text-base font-black disabled:opacity-50 flex items-center justify-center gap-2"
                   >
-                    {isPending ? <><Spinner size={18} /> Agregando...</> : 'Agregar servicio'}
+                    {isPending
+                      ? <><Spinner size={18} /> Agregando...</>
+                      : selectedService.service_variants.filter(v => v.is_active).length > 0 && !selectedVariantId
+                        ? 'Selecciona una variante'
+                        : 'Agregar servicio'
+                    }
                   </motion.button>
                 </motion.div>
               )}
@@ -981,7 +1059,9 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
               {products.map((p) => <ProductCard key={p.id} p={p} />)}
             </div>
             <AnimatePresence>
-              {selectedProductId && (
+              {selectedProductId && (() => {
+                const selProd = products.find(p => p.id === selectedProductId)!
+                return (
                 <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={SPRING} className="space-y-4">
                   <div>
                     <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-3">Cantidad</p>
@@ -989,7 +1069,7 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
                       <motion.button onClick={() => setQty(q => Math.max(1, q - 1))} whileTap={{ scale: 0.82 }} transition={SPRING_FAST} className="w-14 h-14 rounded-2xl border-2 border-zinc-200 text-2xl font-bold text-zinc-700">−</motion.button>
                       <motion.span key={qty} initial={{ scale: 1.3 }} animate={{ scale: 1 }} transition={SPRING_FAST} className="text-4xl font-black text-zinc-900 w-10 text-center tabular-nums">{qty}</motion.span>
                       <motion.button onClick={() => setQty(q => q + 1)} whileTap={{ scale: 0.82 }} transition={SPRING_FAST} className="w-14 h-14 rounded-2xl border-2 border-zinc-200 text-2xl font-bold text-zinc-700">+</motion.button>
-                      <span className="text-sm font-bold text-zinc-500 tabular-nums">= {formatCurrency((products.find(p => p.id === selectedProductId)?.price ?? 0) * qty)}</span>
+                      <span className="text-sm font-bold text-zinc-500 tabular-nums">= {formatCurrency(selProd.price * qty)}</span>
                     </div>
                   </div>
                   <motion.button
@@ -999,10 +1079,14 @@ export function ReceiptDetailClient({ receipt, workers, services, products, user
                     transition={SPRING}
                     className="w-full py-5 bg-rose-900 text-white rounded-2xl text-base font-black disabled:opacity-50 flex items-center justify-center gap-2"
                   >
-                    {isPending ? <><Spinner size={18} /> Agregando...</> : 'Agregar producto'}
+                    {isPending
+                      ? <><Spinner size={18} /> Agregando...</>
+                      : `Agregar ×${qty} — ${formatCurrency(selProd.price * qty)}`
+                    }
                   </motion.button>
                 </motion.div>
-              )}
+                )
+              })()}
             </AnimatePresence>
           </div>
         </BottomSheet>

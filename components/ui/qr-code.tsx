@@ -11,7 +11,7 @@ interface Props {
 }
 
 export function ReceiptQrCode({ receiptId, size = 110, className = '' }: Props) {
-  const url = `${BASE}/dashboard/receipts/${receiptId}/voucher`
+  const url = `${BASE}/r/${receiptId}`
   return (
     <div className={`flex flex-col items-center gap-2 ${className}`}>
       <div className="p-2 bg-white rounded-lg border border-zinc-100">

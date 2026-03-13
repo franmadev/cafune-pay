@@ -192,6 +192,7 @@ export async function getWorkerPayrollDetail(workerId: string, from: string, to:
       .from('receipt_services')
       .select(`
         id, price_charged, commission_amt, commission_type, commission_value,
+        variant_name,
         service_catalog(name),
         receipts!inner(id, issued_at, status, payment_method, clients(full_name))
       `)

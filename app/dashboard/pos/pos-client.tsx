@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plus, Trash2, CheckCircle2, Banknote, CreditCard, Smartphone,
   Shuffle, Maximize2, Minimize2, Scissors, Printer, RotateCcw,
-  ShoppingBag, ChevronLeft, ChevronDown, User, Scan, Download,
+  ShoppingBag, ChevronLeft, ChevronDown, User, Scan, Download, X, Share2,
 } from 'lucide-react'
 import Link from 'next/link'
 import {
@@ -13,7 +13,7 @@ import {
   removeServiceLine, removeProductLine, completeReceipt, voidReceipt,
 } from '@/lib/actions/receipts'
 import { sendReceiptEmail } from '@/lib/actions/email'
-import { formatCurrency, formatDate, calcCommissionAmt } from '@/lib/utils'
+import { formatCurrency, formatDate, calcCommissionAmt, suggestVariantByHairLength, validateRutCL, formatRutCL } from '@/lib/utils'
 import { Spinner } from '@/components/ui/spinner'
 import { BarcodeScanner } from '@/components/ui/barcode-scanner'
 import { SearchInput } from '@/components/ui/search-input'
@@ -23,19 +23,21 @@ import { playSuccess, playComplete, playError } from '@/lib/sounds'
 import { MonsteraLeaf } from '@/components/ui/monstera-leaf'
 import { BottomSheet } from '@/components/ui/bottom-sheet'
 import type { PaymentMethod } from '@/lib/supabase/types'
+import { searchClients, recordHairLength, addClient } from '@/lib/actions/clients'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type Phase = 'idle' | 'selling' | 'paying' | 'voucher'
 
 type PosService = {
-  id: string
+  id:               string
   price_charged:    number
   commission_amt:   number
   commission_type:  'percentage' | 'fixed'
   commission_value: number
   service_name:     string
   worker_name:      string
+  variant_name:     string | null
 }
 
 type PosProduct = {
@@ -49,20 +51,31 @@ type PosProduct = {
 type ServiceOpt = { type: 'add'; item: PosService } | { type: 'remove'; id: string }
 type ProductOpt = { type: 'add'; item: PosProduct } | { type: 'remove'; id: string }
 
+type ServiceVariant = { id: string; name: string; price: number; is_active: boolean; sort_order: number; hair_length_min: number | null; hair_length_max: number | null }
+type ClientInfo     = { id: string; full_name: string; phone: string | null; hair_length_cm: number | null; rut: string | null; public_token: string }
 type ServiceCatalog = {
   id:               string
   name:             string
   base_price:       number
   commission_type:  'percentage' | 'fixed'
   commission_value: number
+  service_variants: ServiceVariant[]
 }
 type Worker  = { id: string; full_name: string }
-type Product = { id: string; name: string; price: number; barcode?: string | null }
+type Product = {
+  id:      string
+  name:    string
+  price:   number
+  barcode?: string | null
+}
+
+type CommissionMap = Record<string, Record<string, { type: 'percentage' | 'fixed'; value: number }>>
 
 interface Props {
-  workers:  Worker[]
-  services: ServiceCatalog[]
-  products: Product[]
+  workers:       Worker[]
+  services:      ServiceCatalog[]
+  products:      Product[]
+  commissionMap: CommissionMap
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -83,7 +96,7 @@ const PAYMENT_LABEL: Record<string, string> = {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function PosClient({ workers, services, products }: Props) {
+export function PosClient({ workers, services, products, commissionMap }: Props) {
   const posRef = useRef<HTMLDivElement>(null)
 
   // Phase
@@ -120,6 +133,7 @@ export function PosClient({ workers, services, products }: Props) {
   const [catalogQuery,      setCatalogQuery]      = useState('')
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null)
   const [selectedWorkerId,  setSelectedWorkerId]  = useState<string | null>(null)
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null)
 
   // Barcode scanner
   const [showScanner,   setShowScanner]   = useState(false)
@@ -128,6 +142,19 @@ export function PosClient({ workers, services, products }: Props) {
   // Mobile UI
   const [showWorkerPicker,  setShowWorkerPicker]  = useState(false)
   const [showMobileCatalog, setShowMobileCatalog] = useState(false)
+
+  // Client + hair length
+  const [selectedClient,    setSelectedClient]    = useState<ClientInfo | null>(null)
+  const [hairLengthInput,   setHairLengthInput]   = useState('')
+  const [clientQuery,       setClientQuery]       = useState('')
+  const [clientResults,     setClientResults]     = useState<ClientInfo[]>([])
+  // Crear nueva clienta
+  const [isCreatingClient,  setIsCreatingClient]  = useState(false)
+  const [newClientName,     setNewClientName]     = useState('')
+  const [newClientPhone,    setNewClientPhone]    = useState('')
+  const [newClientRut,      setNewClientRut]      = useState('')
+  const [rutError,          setRutError]          = useState<string | null>(null)
+  const [isSavingClient,    setIsSavingClient]    = useState(false)
 
   // Completed sale data
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash')
@@ -140,8 +167,34 @@ export function PosClient({ workers, services, products }: Props) {
     return () => document.removeEventListener('fullscreenchange', handler)
   }, [])
 
+  // Client search debounce
+  useEffect(() => {
+    if (!clientQuery.trim()) { setClientResults([]); return }
+    const timer = setTimeout(async () => {
+      const results = await searchClients(clientQuery)
+      setClientResults(results as ClientInfo[])
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [clientQuery])
+
+  // Auto-suggest variant based on hair length
+  useEffect(() => {
+    const cm = parseInt(hairLengthInput)
+    if (!isNaN(cm) && cm > 0 && selectedService) {
+      const suggested = suggestVariantByHairLength(
+        selectedService.service_variants.filter(v => v.is_active),
+        cm
+      )
+      if (suggested) setSelectedVariantId(suggested.id)
+    }
+  }, [hairLengthInput, selectedServiceId]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Computed (use optimistic lists for instant UI)
-  const selectedService = services.find(s => s.id === selectedServiceId)
+  const selectedService         = services.find(s => s.id === selectedServiceId)
+  const selectedVariant         = selectedService?.service_variants.find(v => v.id === selectedVariantId)
+  const hasHairLengthVariants   = selectedService?.service_variants.some(
+    v => v.is_active && (v.hair_length_min !== null || v.hair_length_max !== null)
+  ) ?? false
   const totalServices   = optServices.reduce((s, l) => s + l.price_charged, 0)
   const totalProducts   = optProducts.reduce((s, l) => s + l.subtotal, 0)
   const totalAmount     = totalServices + totalProducts
@@ -170,23 +223,47 @@ export function PosClient({ workers, services, products }: Props) {
 
   const handleAddService = () => {
     if (!receiptId || !selectedServiceId || !selectedWorkerId || !selectedService) return
-    const worker  = workers.find(w => w.id === selectedWorkerId)!
-    const price   = selectedService.base_price
-    const commAmt = calcCommissionAmt(price, selectedService.commission_type, selectedService.commission_value)
-    const tempId  = crypto.randomUUID()
+    const activeVariants = selectedService.service_variants.filter(v => v.is_active)
+    if (activeVariants.length > 0 && !selectedVariantId) return  // variants required but none selected
+    const worker      = workers.find(w => w.id === selectedWorkerId)!
+    const price       = selectedVariant ? selectedVariant.price : selectedService.base_price
+    const variantName = selectedVariant?.name ?? null
+
+    // Usar override de comisión si existe, si no el default del servicio
+    const override      = commissionMap[selectedWorkerId]?.[selectedServiceId]
+    const commType      = override?.type  ?? selectedService.commission_type
+    const commValue     = override?.value ?? selectedService.commission_value
+    const commAmt       = calcCommissionAmt(price, commType, commValue)
+
+    const tempId      = crypto.randomUUID()
     const tempItem: PosService = {
       id: tempId, price_charged: price, commission_amt: commAmt,
-      commission_type: selectedService.commission_type, commission_value: selectedService.commission_value,
-      service_name: selectedService.name, worker_name: worker.full_name,
+      commission_type: commType, commission_value: commValue,
+      service_name: selectedService.name, worker_name: worker.full_name, variant_name: variantName,
     }
 
     setSelectedServiceId(null)
+    setSelectedVariantId(null)
+
+    // Registrar largo en historial vinculado al receipt (fire-and-forget)
+    const hairCm = parseInt(hairLengthInput)
+    if (selectedClient && !isNaN(hairCm) && hairCm > 0) {
+      recordHairLength(
+        selectedClient.id, hairCm, receiptId ?? undefined,
+        selectedService.name, variantName ?? undefined,
+      )
+    }
+
     startTransition(async () => {
       applyServiceOpt({ type: 'add', item: tempItem })
 
       const { data } = await addServiceToReceipt({
-        receipt_id: receiptId, service_id: selectedServiceId,
-        worker_id: selectedWorkerId, price_charged: price,
+        receipt_id:   receiptId,
+        service_id:   selectedServiceId,
+        worker_id:    selectedWorkerId,
+        price_charged: price,
+        variant_id:   selectedVariantId ?? undefined,
+        variant_name: variantName ?? undefined,
       })
 
       if (data) {
@@ -198,6 +275,7 @@ export function PosClient({ workers, services, products }: Props) {
           commission_value: data.commission_value,
           service_name:     (data.service_catalog as { name: string })?.name ?? selectedService.name,
           worker_name:      (data.workers as { full_name: string })?.full_name ?? worker.full_name,
+          variant_name:     variantName,
         }])
       }
       playSuccess()
@@ -209,13 +287,17 @@ export function PosClient({ workers, services, products }: Props) {
     const prd    = products.find(p => p.id === productId)!
     const tempId = crypto.randomUUID()
     const tempItem: PosProduct = {
-      id: tempId, quantity: 1, unit_price: prd.price, subtotal: prd.price, product_name: prd.name,
+      id: tempId, quantity: 1, unit_price: prd.price, subtotal: prd.price,
+      product_name: prd.name,
     }
 
     startTransition(async () => {
       applyProductOpt({ type: 'add', item: tempItem })
 
-      const { data } = await addProductToReceipt({ receipt_id: receiptId, product_id: productId })
+      const { data } = await addProductToReceipt({
+        receipt_id: receiptId,
+        product_id: productId,
+      })
 
       if (data) {
         setPosProducts(prev => [...prev.filter(p => p.id !== tempId), {
@@ -228,6 +310,36 @@ export function PosClient({ workers, services, products }: Props) {
       }
       playSuccess()
     })
+  }
+
+  const handleCreateClient = async () => {
+    if (!newClientName.trim()) return
+    setIsSavingClient(true)
+    const rut = newClientRut && !rutError ? newClientRut : null
+    const result = await addClient({
+      full_name:      newClientName.trim(),
+      phone:          newClientPhone.trim() || null,
+      rut,
+      hair_length_cm: null,
+    })
+    setIsSavingClient(false)
+    if (result.data) {
+      setSelectedClient(result.data as ClientInfo)
+      setIsCreatingClient(false)
+      setClientQuery('')
+      setNewClientName('')
+      setNewClientPhone('')
+      setNewClientRut('')
+    }
+  }
+
+  const handleShareClientProfile = (client: ClientInfo) => {
+    const url = `${window.location.origin}/c/${client.public_token}`
+    if (navigator.share) {
+      navigator.share({ title: `Perfil de ${client.full_name}`, url })
+    } else {
+      navigator.clipboard.writeText(url)
+    }
   }
 
   const handleScan = (code: string) => {
@@ -278,8 +390,18 @@ export function PosClient({ workers, services, products }: Props) {
     setCompletedAt('')
     setSelectedServiceId(null)
     setSelectedWorkerId(null)
+    setSelectedVariantId(null)
     setCatalogTab('service')
     setActiveWorkerId(null)
+    setSelectedClient(null)
+    setHairLengthInput('')
+    setClientQuery('')
+    setClientResults([])
+    setIsCreatingClient(false)
+    setNewClientName('')
+    setNewClientPhone('')
+    setNewClientRut('')
+    setRutError(null)
     setPhase('idle')
   }
 
@@ -505,11 +627,11 @@ export function PosClient({ workers, services, products }: Props) {
                       className="flex items-start justify-between gap-2 bg-zinc-50 rounded-2xl px-4 py-3"
                     >
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-[#3D5151] truncate">{s.service_name}</p>
-                        <p className="text-xs text-zinc-400 mt-0.5">{s.worker_name}</p>
-                        <p className="text-[11px] text-rose-500 font-medium mt-0.5">
-                          Com. {formatCurrency(s.commission_amt)}
+                        <p className="text-sm font-semibold text-[#3D5151] truncate">
+                          {s.service_name}
+                          {s.variant_name && <span className="text-zinc-400 font-normal"> · {s.variant_name}</span>}
                         </p>
+                        <p className="text-xs text-zinc-400 mt-0.5">{s.worker_name}</p>
                       </div>
                       <div className="flex items-center gap-1.5 flex-shrink-0">
                         <span className="text-base font-bold tabular-nums">{formatCurrency(s.price_charged)}</span>
@@ -645,12 +767,16 @@ export function PosClient({ workers, services, products }: Props) {
                                 }`}
                               >
                                 <p className="text-sm font-bold text-[#3D5151] leading-tight">{svc.name}</p>
-                                <p className="text-xs font-bold text-terra-500 mt-1.5 tabular-nums">{formatCurrency(svc.base_price)}</p>
+                                {svc.service_variants.filter(v => v.is_active).length > 0 ? (
+                                  <p className="text-[11px] text-zinc-400 mt-1.5">{svc.service_variants.filter(v => v.is_active).length} variante{svc.service_variants.filter(v => v.is_active).length !== 1 ? 's' : ''}</p>
+                                ) : (
+                                  <p className="text-xs font-bold text-terra-500 mt-1.5 tabular-nums">{formatCurrency(svc.base_price)}</p>
+                                )}
                               </motion.button>
                             ))}
                           </div>
 
-                          {/* Worker + price confirmation */}
+                          {/* Variant picker + Worker + price confirmation */}
                           <AnimatePresence>
                             {selectedService && (
                               <motion.div
@@ -663,6 +789,127 @@ export function PosClient({ workers, services, products }: Props) {
                                 <p className="text-xs font-black uppercase tracking-widest text-zinc-400">
                                   {selectedService.name}
                                 </p>
+
+                                {/* Client search */}
+                                <div>
+                                  <p className="text-xs font-bold text-zinc-400 mb-2">Clienta (opcional)</p>
+                                  {selectedClient ? (
+                                    <div className="flex items-center justify-between px-3 py-2 bg-rose-50 border-2 border-rose-200 rounded-xl">
+                                      <div>
+                                        <span className="text-sm font-bold text-rose-700">{selectedClient.full_name}</span>
+                                        {selectedClient.rut && <span className="text-xs text-rose-400 ml-2">{selectedClient.rut}</span>}
+                                        {selectedClient.hair_length_cm && (
+                                          <span className="text-xs text-rose-400 ml-2">· último: {selectedClient.hair_length_cm} cm</span>
+                                        )}
+                                      </div>
+                                      <div className="flex items-center gap-1.5">
+                                        <button type="button" onClick={() => handleShareClientProfile(selectedClient)} className="text-rose-300 hover:text-rose-500 transition-colors" title="Compartir perfil">
+                                          <Share2 size={13} />
+                                        </button>
+                                        <button type="button" onClick={() => { setSelectedClient(null); setClientQuery(''); setHairLengthInput('') }} className="text-rose-400 hover:text-rose-600">
+                                          <X size={14} />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : isCreatingClient ? (
+                                    <div className="space-y-2 p-3 bg-zinc-50 border border-zinc-200 rounded-xl">
+                                      <input value={newClientName} onChange={e => setNewClientName(e.target.value)} placeholder="Nombre completo*" className="w-full px-3 py-2 rounded-xl border border-zinc-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-rose-400" />
+                                      <input value={newClientPhone} onChange={e => setNewClientPhone(e.target.value)} placeholder="Teléfono (opcional)" className="w-full px-3 py-2 rounded-xl border border-zinc-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-rose-400" />
+                                      <div>
+                                        <input
+                                          value={newClientRut}
+                                          onChange={e => {
+                                            const f = formatRutCL(e.target.value)
+                                            setNewClientRut(f)
+                                            setRutError(f && !validateRutCL(f) ? 'RUT inválido' : null)
+                                          }}
+                                          placeholder="RUT (opcional, ej: 12.345.678-9)"
+                                          className={`w-full px-3 py-2 rounded-xl border text-sm bg-white focus:outline-none focus:ring-2 focus:ring-rose-400 ${rutError ? 'border-red-300' : 'border-zinc-200'}`}
+                                        />
+                                        {rutError && <p className="text-xs text-red-500 mt-1">{rutError}</p>}
+                                      </div>
+                                      <div className="flex gap-2">
+                                        <button type="button" onClick={handleCreateClient} disabled={isSavingClient || !newClientName.trim()} className="flex-1 py-2 bg-rose-900 text-white rounded-xl text-sm font-bold disabled:opacity-40">
+                                          {isSavingClient ? 'Guardando…' : 'Guardar clienta'}
+                                        </button>
+                                        <button type="button" onClick={() => setIsCreatingClient(false)} className="px-3 py-2 text-zinc-400 hover:text-zinc-600 text-sm">Cancelar</button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="relative">
+                                      <input value={clientQuery} onChange={e => setClientQuery(e.target.value)} placeholder="Buscar clienta…" className="w-full px-3 py-2 rounded-xl border border-zinc-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-rose-400" />
+                                      {clientResults.length > 0 && (
+                                        <div className="absolute top-full mt-1 left-0 right-0 bg-white border border-zinc-200 rounded-xl shadow-lg z-10 overflow-hidden">
+                                          {clientResults.map(c => (
+                                            <button key={c.id} type="button" onClick={() => { setSelectedClient(c); setClientQuery(''); setClientResults([]); if (c.hair_length_cm) setHairLengthInput(String(c.hair_length_cm)) }} className="w-full text-left px-3 py-2 text-sm hover:bg-rose-50 flex items-center justify-between border-b border-zinc-100 last:border-0">
+                                              <div>
+                                                <span className="font-medium text-zinc-700">{c.full_name}</span>
+                                                {c.rut && <span className="text-xs text-zinc-400 ml-1.5">{c.rut}</span>}
+                                              </div>
+                                              {c.hair_length_cm && <span className="text-xs text-zinc-400">{c.hair_length_cm} cm</span>}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      )}
+                                      {clientQuery && clientResults.length === 0 && (
+                                        <button type="button" onClick={() => { setIsCreatingClient(true); setNewClientName(clientQuery) }} className="mt-1.5 w-full text-left px-3 py-2 text-sm text-rose-600 font-medium hover:bg-rose-50 rounded-xl border border-dashed border-rose-300">
+                                          + Crear clienta &ldquo;{clientQuery}&rdquo;
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Hair length input */}
+                                {hasHairLengthVariants && (
+                                  <div>
+                                    <p className="text-xs font-bold text-zinc-400 mb-2">Largo del cabello</p>
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        max="200"
+                                        value={hairLengthInput}
+                                        onChange={e => setHairLengthInput(e.target.value)}
+                                        placeholder="ej: 35"
+                                        className="w-24 px-3 py-2 rounded-xl border border-zinc-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-rose-400 tabular-nums"
+                                      />
+                                      <span className="text-sm text-zinc-400">cm</span>
+                                      {hairLengthInput && selectedVariant && (
+                                        <span className="text-xs font-bold text-rose-600">→ {selectedVariant.name}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Variants (if any) */}
+                                {selectedService.service_variants.filter(v => v.is_active).length > 0 && (
+                                  <div>
+                                    <p className="text-xs font-bold text-zinc-400 mb-2.5">Variante</p>
+                                    <div className="grid grid-cols-2 gap-2">
+                                      {selectedService.service_variants
+                                        .filter(v => v.is_active)
+                                        .sort((a, b) => a.sort_order - b.sort_order)
+                                        .map(v => (
+                                          <motion.button
+                                            key={v.id}
+                                            onClick={() => setSelectedVariantId(v.id === selectedVariantId ? null : v.id)}
+                                            whileTap={{ scale: 0.93 }}
+                                            animate={{ scale: v.id === selectedVariantId ? 1.03 : 1 }}
+                                            transition={SPRING}
+                                            className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border-2 transition-colors ${
+                                              v.id === selectedVariantId
+                                                ? 'border-rose-500 bg-rose-50 shadow-md shadow-rose-500/10'
+                                                : 'border-zinc-200 bg-zinc-50 hover:border-zinc-300'
+                                            }`}
+                                          >
+                                            <span className="text-sm font-bold text-[#3D5151]">{v.name}</span>
+                                            <span className="text-sm font-bold text-terra-500 tabular-nums">{formatCurrency(v.price)}</span>
+                                          </motion.button>
+                                        ))}
+                                    </div>
+                                  </div>
+                                )}
 
                                 {/* Workers */}
                                 <div>
@@ -688,38 +935,30 @@ export function PosClient({ workers, services, products }: Props) {
                                 </div>
 
                                 {/* Price summary + add */}
-                                <div className="flex items-center justify-between">
-                                  <div>
-                                    <p className="text-base font-black tabular-nums text-[#3D5151]">
-                                      {formatCurrency(selectedService.base_price)}
-                                    </p>
-                                    <p className="text-xs text-zinc-400 mt-0.5">
-                                      Com.{' '}
-                                      {selectedService.commission_type === 'percentage'
-                                        ? `${selectedService.commission_value}%`
-                                        : formatCurrency(selectedService.commission_value)
-                                      }
-                                      {' → '}
-                                      {formatCurrency(
-                                        calcCommissionAmt(
-                                          selectedService.base_price,
-                                          selectedService.commission_type,
-                                          selectedService.commission_value,
-                                        )
-                                      )}
-                                    </p>
-                                  </div>
-                                  <motion.button
-                                    onClick={handleAddService}
-                                    disabled={!selectedWorkerId || isPending}
-                                    whileTap={{ scale: 0.92 }}
-                                    transition={SPRING}
-                                    className="flex items-center gap-2 px-5 py-3.5 bg-rose-900 text-white rounded-xl font-bold text-sm hover:bg-rose-800 disabled:opacity-40 shadow-md shadow-rose-900/15 transition-opacity"
-                                  >
-                                    {isPending ? <Spinner size={15} /> : <Plus size={15} strokeWidth={2.5} />}
-                                    Agregar
-                                  </motion.button>
-                                </div>
+                                {(() => {
+                                  const activeVariants = selectedService.service_variants.filter(v => v.is_active)
+                                  const effectivePrice = selectedVariant ? selectedVariant.price : selectedService.base_price
+                                  const canAdd = !!selectedWorkerId && (activeVariants.length === 0 || !!selectedVariantId)
+                                  return (
+                                    <div className="flex items-center justify-between">
+                                      <div>
+                                        <p className="text-base font-black tabular-nums text-[#3D5151]">
+                                          {formatCurrency(effectivePrice)}
+                                        </p>
+                                      </div>
+                                      <motion.button
+                                        onClick={handleAddService}
+                                        disabled={!canAdd || isPending}
+                                        whileTap={{ scale: 0.92 }}
+                                        transition={SPRING}
+                                        className="flex items-center gap-2 px-5 py-3.5 bg-rose-900 text-white rounded-xl font-bold text-sm hover:bg-rose-800 disabled:opacity-40 shadow-md shadow-rose-900/15 transition-opacity"
+                                      >
+                                        {isPending ? <Spinner size={15} /> : <Plus size={15} strokeWidth={2.5} />}
+                                        Agregar
+                                      </motion.button>
+                                    </div>
+                                  )
+                                })()}
                               </motion.div>
                             )}
                           </AnimatePresence>
@@ -763,26 +1002,27 @@ export function PosClient({ workers, services, products }: Props) {
                         </div>
                       ) : (
                         <div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
-                          {products.filter(p =>
-                            !catalogQuery ||
-                            p.name.toLowerCase().includes(catalogQuery.toLowerCase()) ||
-                            (p.barcode ?? '').includes(catalogQuery)
-                          ).map(prd => (
-                            <motion.button
-                              key={prd.id}
-                              onClick={() => handleAddProduct(prd.id)}
-                              whileTap={{ scale: 0.91 }}
-                              transition={SPRING}
-                              className="text-left p-4 rounded-2xl border-2 border-zinc-200 bg-white hover:border-rose-300 hover:bg-rose-50 active:border-rose-500 transition-colors"
-                            >
-                              <p className="text-sm font-bold text-[#3D5151] leading-tight">{prd.name}</p>
-                              <p className="text-xs font-bold text-terra-500 mt-1.5 tabular-nums">{formatCurrency(prd.price)}</p>
-                              {prd.barcode && (
-                                <p className="text-[10px] text-zinc-300 font-mono mt-1 truncate">{prd.barcode}</p>
-                              )}
-                            </motion.button>
-                          ))}
-                        </div>
+                            {products.filter(p =>
+                              !catalogQuery ||
+                              p.name.toLowerCase().includes(catalogQuery.toLowerCase()) ||
+                              (p.barcode ?? '').includes(catalogQuery)
+                            ).map(prd => (
+                              <motion.button
+                                key={prd.id}
+                                onClick={() => handleAddProduct(prd.id)}
+                                disabled={isPending}
+                                whileTap={{ scale: 0.91 }}
+                                transition={SPRING}
+                                className="text-left p-4 rounded-2xl border-2 border-zinc-200 bg-white hover:border-rose-300 hover:bg-rose-50 transition-colors disabled:opacity-40"
+                              >
+                                <p className="text-sm font-bold text-[#3D5151] leading-tight">{prd.name}</p>
+                                <p className="text-xs font-bold text-terra-500 mt-1.5 tabular-nums">{formatCurrency(prd.price)}</p>
+                                {prd.barcode && (
+                                  <p className="text-[10px] text-zinc-300 font-mono mt-1 truncate">{prd.barcode}</p>
+                                )}
+                              </motion.button>
+                            ))}
+                          </div>
                       )}
                     </>
                   )}
@@ -841,7 +1081,10 @@ export function PosClient({ workers, services, products }: Props) {
                       {optServices.map(s => (
                         <div key={s.id}>
                           <div className="flex justify-between text-sm">
-                            <span className="font-medium text-[#3D5151]">{s.service_name}</span>
+                            <span className="font-medium text-[#3D5151]">
+                              {s.service_name}
+                              {s.variant_name && <span className="text-zinc-400 font-normal"> · {s.variant_name}</span>}
+                            </span>
                             <span className="tabular-nums font-semibold">{formatCurrency(s.price_charged)}</span>
                           </div>
                           <p className="text-xs text-zinc-400 mt-0.5">→ {s.worker_name}</p>
@@ -994,7 +1237,7 @@ export function PosClient({ workers, services, products }: Props) {
                   ).map(svc => (
                     <motion.button
                       key={svc.id}
-                      onClick={() => setSelectedServiceId(svc.id === selectedServiceId ? null : svc.id)}
+                      onClick={() => { setSelectedServiceId(svc.id === selectedServiceId ? null : svc.id); setSelectedVariantId(null) }}
                       whileTap={{ scale: 0.93 }}
                       animate={{ scale: svc.id === selectedServiceId ? 1.03 : 1 }}
                       transition={SPRING}
@@ -1005,7 +1248,11 @@ export function PosClient({ workers, services, products }: Props) {
                       }`}
                     >
                       <p className="text-sm font-bold text-[#3D5151] leading-snug">{svc.name}</p>
-                      <p className="text-xs font-bold text-terra-500 mt-1.5 tabular-nums">{formatCurrency(svc.base_price)}</p>
+                      {svc.service_variants.filter(v => v.is_active).length > 0 ? (
+                        <p className="text-[11px] text-zinc-400 mt-1.5">{svc.service_variants.filter(v => v.is_active).length} variante{svc.service_variants.filter(v => v.is_active).length !== 1 ? 's' : ''}</p>
+                      ) : (
+                        <p className="text-xs font-bold text-terra-500 mt-1.5 tabular-nums">{formatCurrency(svc.base_price)}</p>
+                      )}
                     </motion.button>
                   ))}
                 </div>
@@ -1019,6 +1266,110 @@ export function PosClient({ workers, services, products }: Props) {
                       transition={SPRING}
                       className="space-y-3"
                     >
+                      {/* Client search */}
+                      <div>
+                        <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Clienta (opcional)</p>
+                        {selectedClient ? (
+                          <div className="flex items-center justify-between px-3 py-2 bg-rose-50 border-2 border-rose-200 rounded-xl">
+                            <div>
+                              <span className="text-sm font-bold text-rose-700">{selectedClient.full_name}</span>
+                              {selectedClient.rut && <span className="text-xs text-rose-400 ml-2">{selectedClient.rut}</span>}
+                              {selectedClient.hair_length_cm && <span className="text-xs text-rose-400 ml-2">· {selectedClient.hair_length_cm} cm</span>}
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button type="button" onClick={() => handleShareClientProfile(selectedClient)} className="text-rose-300 hover:text-rose-500" title="Compartir perfil"><Share2 size={13} /></button>
+                              <button type="button" onClick={() => { setSelectedClient(null); setClientQuery(''); setHairLengthInput('') }} className="text-rose-400 hover:text-rose-600"><X size={14} /></button>
+                            </div>
+                          </div>
+                        ) : isCreatingClient ? (
+                          <div className="space-y-2 p-3 bg-zinc-50 border border-zinc-200 rounded-xl">
+                            <input value={newClientName} onChange={e => setNewClientName(e.target.value)} placeholder="Nombre completo*" className="w-full px-3 py-2 rounded-xl border border-zinc-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-rose-400" />
+                            <input value={newClientPhone} onChange={e => setNewClientPhone(e.target.value)} placeholder="Teléfono (opcional)" className="w-full px-3 py-2 rounded-xl border border-zinc-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-rose-400" />
+                            <div>
+                              <input value={newClientRut} onChange={e => { const f = formatRutCL(e.target.value); setNewClientRut(f); setRutError(f && !validateRutCL(f) ? 'RUT inválido' : null) }} placeholder="RUT (opcional)" className={`w-full px-3 py-2 rounded-xl border text-sm bg-white focus:outline-none focus:ring-2 focus:ring-rose-400 ${rutError ? 'border-red-300' : 'border-zinc-200'}`} />
+                              {rutError && <p className="text-xs text-red-500 mt-1">{rutError}</p>}
+                            </div>
+                            <div className="flex gap-2">
+                              <button type="button" onClick={handleCreateClient} disabled={isSavingClient || !newClientName.trim()} className="flex-1 py-2 bg-rose-900 text-white rounded-xl text-sm font-bold disabled:opacity-40">{isSavingClient ? 'Guardando…' : 'Guardar clienta'}</button>
+                              <button type="button" onClick={() => setIsCreatingClient(false)} className="px-3 py-2 text-zinc-400 text-sm">Cancelar</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="relative">
+                            <input value={clientQuery} onChange={e => setClientQuery(e.target.value)} placeholder="Buscar clienta…" className="w-full px-3 py-2 rounded-xl border border-zinc-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-rose-400" />
+                            {clientResults.length > 0 && (
+                              <div className="absolute top-full mt-1 left-0 right-0 bg-white border border-zinc-200 rounded-xl shadow-lg z-10 overflow-hidden">
+                                {clientResults.map(c => (
+                                  <button key={c.id} type="button" onClick={() => { setSelectedClient(c); setClientQuery(''); setClientResults([]); if (c.hair_length_cm) setHairLengthInput(String(c.hair_length_cm)) }} className="w-full text-left px-3 py-2 text-sm hover:bg-rose-50 flex items-center justify-between border-b border-zinc-100 last:border-0">
+                                    <div>
+                                      <span className="font-medium text-zinc-700">{c.full_name}</span>
+                                      {c.rut && <span className="text-xs text-zinc-400 ml-1.5">{c.rut}</span>}
+                                    </div>
+                                    {c.hair_length_cm && <span className="text-xs text-zinc-400">{c.hair_length_cm} cm</span>}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {clientQuery && clientResults.length === 0 && (
+                              <button type="button" onClick={() => { setIsCreatingClient(true); setNewClientName(clientQuery) }} className="mt-1.5 w-full text-left px-3 py-2 text-sm text-rose-600 font-medium hover:bg-rose-50 rounded-xl border border-dashed border-rose-300">
+                                + Crear clienta &ldquo;{clientQuery}&rdquo;
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Hair length input */}
+                      {hasHairLengthVariants && (
+                        <div>
+                          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Largo del cabello</p>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min="0"
+                              max="200"
+                              value={hairLengthInput}
+                              onChange={e => setHairLengthInput(e.target.value)}
+                              placeholder="ej: 35"
+                              className="w-24 px-3 py-2 rounded-xl border border-zinc-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-rose-400 tabular-nums"
+                            />
+                            <span className="text-sm text-zinc-400">cm</span>
+                            {hairLengthInput && selectedVariant && (
+                              <span className="text-xs font-bold text-rose-600">→ {selectedVariant.name}</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Variants (if any) */}
+                      {selectedService.service_variants.filter(v => v.is_active).length > 0 && (
+                        <>
+                          <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Variante</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            {selectedService.service_variants
+                              .filter(v => v.is_active)
+                              .sort((a, b) => a.sort_order - b.sort_order)
+                              .map(v => (
+                                <motion.button
+                                  key={v.id}
+                                  onClick={() => setSelectedVariantId(v.id === selectedVariantId ? null : v.id)}
+                                  whileTap={{ scale: 0.93 }}
+                                  animate={{ scale: v.id === selectedVariantId ? 1.03 : 1 }}
+                                  transition={SPRING}
+                                  className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border-2 transition-colors ${
+                                    v.id === selectedVariantId
+                                      ? 'border-rose-500 bg-rose-50'
+                                      : 'border-zinc-200 bg-white'
+                                  }`}
+                                >
+                                  <span className="text-sm font-bold text-[#3D5151]">{v.name}</span>
+                                  <span className="text-sm font-bold text-terra-500 tabular-nums">{formatCurrency(v.price)}</span>
+                                </motion.button>
+                              ))}
+                          </div>
+                        </>
+                      )}
+
                       <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Trabajadora</p>
                       <div className="flex flex-wrap gap-2">
                         {workers.map(w => (
@@ -1038,16 +1389,23 @@ export function PosClient({ workers, services, products }: Props) {
                           </motion.button>
                         ))}
                       </div>
-                      <motion.button
-                        onClick={() => { handleAddService(); setShowMobileCatalog(false) }}
-                        disabled={!selectedWorkerId || isPending}
-                        whileTap={{ scale: 0.96 }}
-                        transition={SPRING}
-                        className="w-full py-5 bg-rose-900 text-white rounded-2xl text-base font-black disabled:opacity-40 flex items-center justify-center gap-2.5 shadow-lg shadow-rose-900/15"
-                      >
-                        <Plus size={20} strokeWidth={2.5} />
-                        Agregar — {formatCurrency(selectedService.base_price)}
-                      </motion.button>
+                      {(() => {
+                        const activeVariants = selectedService.service_variants.filter(v => v.is_active)
+                        const effectivePrice = selectedVariant ? selectedVariant.price : selectedService.base_price
+                        const canAdd = !!selectedWorkerId && (activeVariants.length === 0 || !!selectedVariantId)
+                        return (
+                          <motion.button
+                            onClick={() => { handleAddService(); setShowMobileCatalog(false) }}
+                            disabled={!canAdd || isPending}
+                            whileTap={{ scale: 0.96 }}
+                            transition={SPRING}
+                            className="w-full py-5 bg-rose-900 text-white rounded-2xl text-base font-black disabled:opacity-40 flex items-center justify-center gap-2.5 shadow-lg shadow-rose-900/15"
+                          >
+                            <Plus size={20} strokeWidth={2.5} />
+                            Agregar — {formatCurrency(effectivePrice)}
+                          </motion.button>
+                        )
+                      })()}
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -1075,9 +1433,10 @@ export function PosClient({ workers, services, products }: Props) {
                     <motion.button
                       key={prd.id}
                       onClick={() => { handleAddProduct(prd.id); setShowMobileCatalog(false) }}
+                      disabled={isPending}
                       whileTap={{ scale: 0.91 }}
                       transition={SPRING}
-                      className="text-left p-4 rounded-2xl border-2 border-zinc-200 bg-white hover:border-rose-300 hover:bg-rose-50 active:border-rose-500 transition-colors"
+                      className="text-left p-4 rounded-2xl border-2 border-zinc-200 bg-white disabled:opacity-40"
                     >
                       <p className="text-sm font-bold text-[#3D5151] leading-snug">{prd.name}</p>
                       <p className="text-xs font-bold text-terra-500 mt-1.5 tabular-nums">{formatCurrency(prd.price)}</p>

@@ -3,25 +3,31 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { motion } from 'framer-motion'
-import { Home, Receipt, Users, Tag, BarChart2, ShoppingCart } from 'lucide-react'
+import { Home, Receipt, Users, Tag, BarChart2, ShoppingCart, UserRound, Settings, FileText } from 'lucide-react'
 import type { UserRole } from '@/lib/supabase/types'
 
-interface Props { role: UserRole }
+interface Props { role: UserRole; workerId?: string }
 
-const NAV = [
+const BASE_NAV = [
   { href: '/dashboard',          label: 'Inicio',    icon: Home },
   { href: '/dashboard/pos',      label: 'Venta',     icon: ShoppingCart },
   { href: '/dashboard/receipts', label: 'Historial', icon: Receipt },
 ]
 const ADMIN_NAV = [
-  { href: '/dashboard/workers',  label: 'Equipo',   icon: Users },
-  { href: '/dashboard/catalog',  label: 'Catálogo', icon: Tag },
-  { href: '/dashboard/reports',  label: 'Reportes', icon: BarChart2 },
+  { href: '/dashboard/workers',  label: 'Equipo',    icon: Users },
+  { href: '/dashboard/clients',  label: 'Clientas',  icon: UserRound },
+  { href: '/dashboard/catalog',  label: 'Catálogo',  icon: Tag },
+  { href: '/dashboard/reports',  label: 'Reportes',  icon: BarChart2 },
+  { href: '/dashboard/settings', label: 'Config',    icon: Settings },
 ]
 
-export function BottomNav({ role }: Props) {
+export function BottomNav({ role, workerId }: Props) {
   const pathname = usePathname()
-  const items    = role === 'worker' ? NAV : [...NAV, ...ADMIN_NAV]
+  const workerExtraNav = workerId ? [
+    { href: '/dashboard/clients', label: 'Clientas', icon: UserRound },
+    { href: `/dashboard/reports/payroll?workerId=${workerId}`, label: 'Nómina', icon: FileText },
+  ] : []
+  const items = role === 'worker' ? [...BASE_NAV, ...workerExtraNav] : [...BASE_NAV, ...ADMIN_NAV]
 
   const isActive = (href: string) =>
     href === '/dashboard' ? pathname === href : pathname.startsWith(href)

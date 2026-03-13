@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { getMyProfile } from '@/lib/actions/auth'
-import { getServices, getProducts, createService, createProduct, toggleService } from '@/lib/actions/catalog'
+import { getServicesWithVariants, getProducts, createService, toggleService } from '@/lib/actions/catalog'
 import { ProductFormClient } from './product-form-client'
 import { ServicesListClient, ProductsListClient } from './catalog-list-client'
 import { AdminGate } from '@/components/ui/admin-gate'
@@ -20,7 +20,7 @@ export default async function CatalogPage({
   const isServices = tab !== 'products'
 
   const [services, products] = await Promise.all([
-    getServices(false),
+    getServicesWithVariants(false),
     getProducts(false),
   ])
 
@@ -33,16 +33,6 @@ export default async function CatalogPage({
       commission_value: Number(formData.get('commission_value')),
       description:      (formData.get('description') as string) || null,
       qr_code:          null,
-    })
-    revalidatePath('/dashboard/catalog')
-  }
-
-  async function handleCreateProduct(formData: FormData) {
-    'use server'
-    await createProduct({
-      name:    formData.get('name')    as string,
-      price:   Number(formData.get('price')),
-      barcode: (formData.get('barcode') as string) || null,
     })
     revalidatePath('/dashboard/catalog')
   }
@@ -168,7 +158,7 @@ export default async function CatalogPage({
 
           <div className="bg-white border border-zinc-200 rounded-2xl p-5">
             <h2 className="text-sm font-semibold text-zinc-700 mb-4">Nuevo producto</h2>
-            <ProductFormClient action={handleCreateProduct} />
+            <ProductFormClient />
           </div>
         </>
       )}

@@ -4,6 +4,7 @@ import type { Database } from '@/lib/supabase/types'
 
 // Rutas que no requieren autenticación
 const PUBLIC_ROUTES = ['/', '/login']
+const PUBLIC_PREFIXES = ['/r/', '/c/']
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
@@ -32,9 +33,9 @@ export async function middleware(request: NextRequest) {
   // Refrescar sesión (no remover esta llamada)
   const { data: { user } } = await supabase.auth.getUser()
 
-  const isPublicRoute = PUBLIC_ROUTES.some(
-    (route) => request.nextUrl.pathname === route
-  )
+  const isPublicRoute =
+    PUBLIC_ROUTES.some((route) => request.nextUrl.pathname === route) ||
+    PUBLIC_PREFIXES.some((prefix) => request.nextUrl.pathname.startsWith(prefix))
 
   // Sin sesión + ruta protegida → redirigir a login
   if (!user && !isPublicRoute) {

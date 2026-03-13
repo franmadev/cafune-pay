@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { brevo, SENDER } from '@/lib/brevo'
 import { createClient } from '@/lib/supabase/server'
 import { getWorkerPayrollDetail } from '@/lib/actions/reports'
+import { getHonorariosRate } from '@/lib/actions/settings'
 import { formatCurrency, formatDate, formatDateShort } from '@/lib/utils'
 
 // ── Boleta ─────────────────────────────────────────────────────────────────
@@ -81,7 +82,7 @@ export async function sendReceiptEmail(receiptId: string, overrideEmail?: string
   }
 
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '')
-  const receiptUrl = `${appUrl}/dashboard/receipts/${receiptId}/voucher`
+  const receiptUrl = `${appUrl}/r/${receiptId}`
   const qrDataUrl = await QRCode.toDataURL(receiptUrl, {
     width: 140,
     margin: 1,
@@ -207,11 +208,16 @@ export async function sendPayrollEmail(workerId: string, from: string, to: strin
   const fromISO = `${from}T00:00:00`
   const toISO   = `${to}T23:59:59`
 
-  const detail = await getWorkerPayrollDetail(workerId, fromISO, toISO)
-  if (!detail)            return { error: 'Trabajadora no encontrada' }
+  const [detail, honorariosRate] = await Promise.all([
+    getWorkerPayrollDetail(workerId, fromISO, toISO),
+    getHonorariosRate(),
+  ])
+  if (!detail)              return { error: 'Trabajadora no encontrada' }
   if (!detail.worker.email) return { error: 'La trabajadora no tiene email registrado' }
 
   const { worker } = detail
+  const descuento = Math.round(detail.total_comisiones * honorariosRate) / 100
+  const neto      = Math.round((detail.total_comisiones - descuento) * 100) / 100
   const fromLabel  = formatDateShort(fromISO)
   const toLabel    = formatDateShort(toISO)
 
@@ -306,10 +312,20 @@ export async function sendPayrollEmail(workerId: string, from: string, to: strin
     `}
 
     <div style="padding:20px 24px;">
-      <p style="margin:0 0 10px;font-size:10px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#9ca3af;">Total a cobrar</p>
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#3D5151;">Total</span>
-        <span style="font-size:26px;font-weight:900;color:#A68776;">${formatCurrency(detail.total_comisiones)}</span>
+      <p style="margin:0 0 10px;font-size:10px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:#9ca3af;">Liquidación</p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px;">
+        <tr>
+          <td style="color:#9ca3af;padding:3px 0;">Comisión bruta</td>
+          <td style="text-align:right;font-weight:500;">${formatCurrency(detail.total_comisiones)}</td>
+        </tr>
+        <tr>
+          <td style="color:#9ca3af;padding:3px 0;">Desc. honorarios (${honorariosRate}%)</td>
+          <td style="text-align:right;font-weight:500;color:#9ca3af;">− ${formatCurrency(descuento)}</td>
+        </tr>
+      </table>
+      <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px dashed #e4e4e7;padding-top:14px;">
+        <span style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#3D5151;">Neto a recibir</span>
+        <span style="font-size:26px;font-weight:900;color:#A68776;">${formatCurrency(neto)}</span>
       </div>
     </div>
 

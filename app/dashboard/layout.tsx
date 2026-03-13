@@ -20,7 +20,7 @@ export default async function DashboardLayout({
   return (
     <div className="min-h-screen bg-[#F2F7F7] print:bg-white">
       <div className="print:hidden">
-        <Sidebar role={profile.role} fullName={displayName} />
+        <Sidebar role={profile.role} fullName={displayName} workerId={worker?.id} />
       </div>
 
       <main className="md:pl-[72px] lg:pl-64 pb-20 md:pb-0 print:pl-0 print:pb-0">
@@ -28,7 +28,7 @@ export default async function DashboardLayout({
       </main>
 
       <div className="print:hidden">
-        <BottomNav role={profile.role} />
+        <BottomNav role={profile.role} workerId={worker?.id} />
       </div>
     </div>
   )
