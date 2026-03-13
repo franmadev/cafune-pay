@@ -39,7 +39,7 @@ export function PayrollPayControl({
     startTransition(async () => {
       const result = await markPayrollPaid(workerId, netAmount, method)
       if (result.error) return
-      if ('dateFrom' in result) {
+      if ('dateFrom' in result && result.dateFrom && result.dateTo && result.paidAt) {
         setPayment({
           worker_id:      workerId,
           date_from:      result.dateFrom,

@@ -41,7 +41,7 @@ export function PayrollStatusCard({ worker: w, netAmount, from, to, initialPayme
   const handlePay = (method: 'cash' | 'transfer') => {
     setShowMenu(false)
     startTransition(async () => {
-      const result = await markPayrollPaid(w.worker_id, from, to, netAmount, method)
+      const result = await markPayrollPaid(w.worker_id, netAmount, method)
       if (!result.error) {
         setPayment({
           worker_id:      w.worker_id,
